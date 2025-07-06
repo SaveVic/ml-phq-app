@@ -11,7 +11,7 @@ from PIL import Image
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QLabel, QVBoxLayout
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QImage, QPixmap
-import config as cfg  # Asumsikan file config.py Anda ada
+import src.config.model as cfg  # Asumsikan file config.py Anda ada
 
 
 def softmax(x):
@@ -31,7 +31,7 @@ def create_timm_transform(model_name: str):
     print("✅ Pipeline transformasi yang digunakan:")
     print(transform)
 
-    input_size = data_cfg['input_size']
+    input_size = data_cfg["input_size"]
     del model
     return transform, (input_size[1], input_size[2])
 
@@ -50,7 +50,9 @@ class CameraWindow(QMainWindow):
             self.ort_session = onnxruntime.InferenceSession(cfg.MODEL_PATH)
             self.input_name = self.ort_session.get_inputs()[0].name
             output_shape = self.ort_session.get_outputs()[0].shape
-            jumlah_kelas = output_shape[1]  # Asumsi bentuk output adalah [batch_size, num_classes]
+            jumlah_kelas = output_shape[
+                1
+            ]  # Asumsi bentuk output adalah [batch_size, num_classes]
             print(f"✅ Model ini memiliki {jumlah_kelas} kelas output.")
             # -----------------------------
 
@@ -62,13 +64,15 @@ class CameraWindow(QMainWindow):
             return
         try:
             self.face_cascade = cv2.CascadeClassifier(cfg.HAAR_CASCADE_PATH)
-            print(f"✅ Classifier Wajah (Haar) '{cfg.HAAR_CASCADE_PATH}' berhasil dimuat.")
+            print(
+                f"✅ Classifier Wajah (Haar) '{cfg.HAAR_CASCADE_PATH}' berhasil dimuat."
+            )
             self.mp_face_mesh = mp.solutions.face_mesh
             self.face_mesh = self.mp_face_mesh.FaceMesh(
                 static_image_mode=False,  # False lebih baik untuk video real-time
                 max_num_faces=1,
                 min_detection_confidence=0.5,
-                min_tracking_confidence=0.5
+                min_tracking_confidence=0.5,
             )
             print("✅ MediaPipe Face Mesh model berhasil dimuat.")
 
@@ -99,7 +103,10 @@ class CameraWindow(QMainWindow):
             if not results.multi_face_landmarks:
                 return None
             landmarks_unnormalized = np.array(
-                [(lm.x * roi_w, lm.y * roi_h) for lm in results.multi_face_landmarks[0].landmark]
+                [
+                    (lm.x * roi_w, lm.y * roi_h)
+                    for lm in results.multi_face_landmarks[0].landmark
+                ]
             )
             left_eye = landmarks_unnormalized[133]
             right_eye = landmarks_unnormalized[362]
@@ -107,9 +114,14 @@ class CameraWindow(QMainWindow):
             dX = right_eye[0] - left_eye[0]
             angle = np.degrees(np.arctan2(dY, dX))
 
-            eyes_center = ((left_eye[0] + right_eye[0]) // 2, (left_eye[1] + right_eye[1]) // 2)
+            eyes_center = (
+                (left_eye[0] + right_eye[0]) // 2,
+                (left_eye[1] + right_eye[1]) // 2,
+            )
             M = cv2.getRotationMatrix2D(eyes_center, angle, scale=1.0)
-            aligned_face = cv2.warpAffine(face_roi, M, (roi_w, roi_h), flags=cv2.INTER_CUBIC)
+            aligned_face = cv2.warpAffine(
+                face_roi, M, (roi_w, roi_h), flags=cv2.INTER_CUBIC
+            )
             return aligned_face
         except Exception:
             return None
@@ -130,18 +142,22 @@ class CameraWindow(QMainWindow):
                 frame,
                 scaleFactor=cfg.HAAR_SCALE_FACTOR,
                 minNeighbors=cfg.HAAR_MIN_NEIGHBORS,
-                minSize=cfg.HAAR_MIN_SIZE
+                minSize=cfg.HAAR_MIN_SIZE,
             )
-            for (x, y, w, h) in self.last_known_faces:
-                face_roi = frame[y:y+h, x:x+w]
+            for x, y, w, h in self.last_known_faces:
+                face_roi = frame[y : y + h, x : x + w]
                 if face_roi.size != 0:
                     aligned_face = self.align_face_roi(face_roi)
                     if aligned_face is not None:
                         # Konversi wajah yang sudah lurus & grayscale (via transform) untuk model
-                        pil_image = Image.fromarray(cv2.cvtColor(aligned_face, cv2.COLOR_BGR2RGB))
+                        pil_image = Image.fromarray(
+                            cv2.cvtColor(aligned_face, cv2.COLOR_BGR2RGB)
+                        )
                         input_tensor = self.transform(pil_image).unsqueeze(0).numpy()
                         # Jalankan inferensi ONNX
-                        outputs = self.ort_session.run(None, {self.input_name: input_tensor})
+                        outputs = self.ort_session.run(
+                            None, {self.input_name: input_tensor}
+                        )
                         scores = outputs[0][0]
                         probabilities = softmax(scores)
                         predicted_index = np.argmax(probabilities)
@@ -153,12 +169,21 @@ class CameraWindow(QMainWindow):
                         self.last_known_predictions[(x, y, w, h)] = display_text
 
         # Gambar kotak dan teks di frame display
-        for (x, y, w, h) in self.last_known_faces:
-            cv2.rectangle(display_frame, (x, y), (x+w, y+h), cfg.BOX_COLOR, cfg.FONT_THICKNESS)
+        for x, y, w, h in self.last_known_faces:
+            cv2.rectangle(
+                display_frame, (x, y), (x + w, y + h), cfg.BOX_COLOR, cfg.FONT_THICKNESS
+            )
             if (x, y, w, h) in self.last_known_predictions:
                 display_text = self.last_known_predictions[(x, y, w, h)]
-                cv2.putText(display_frame, display_text, (x, y - 10),
-                            cfg.FONT, cfg.FONT_SCALE, cfg.TEXT_COLOR, cfg.FONT_THICKNESS)
+                cv2.putText(
+                    display_frame,
+                    display_text,
+                    (x, y - 10),
+                    cfg.FONT,
+                    cfg.FONT_SCALE,
+                    cfg.TEXT_COLOR,
+                    cfg.FONT_THICKNESS,
+                )
 
         qt_image = self.convert_cv_to_qt(display_frame)
         self.image_label.setPixmap(QPixmap.fromImage(qt_image))
@@ -167,8 +192,14 @@ class CameraWindow(QMainWindow):
         rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
-        qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
-        return qt_format.scaled(self.image_label.width(), self.image_label.height(), Qt.AspectRatioMode.KeepAspectRatio)
+        qt_format = QImage(
+            rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888
+        )
+        return qt_format.scaled(
+            self.image_label.width(),
+            self.image_label.height(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+        )
 
     def closeEvent(self, event):
         self.timer.stop()
@@ -180,6 +211,6 @@ class CameraWindow(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = CameraWindow()
-    if hasattr(window, 'cap') and window.cap.isOpened():
+    if hasattr(window, "cap") and window.cap.isOpened():
         window.show()
     sys.exit(app.exec())
