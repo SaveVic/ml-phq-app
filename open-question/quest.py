@@ -12,8 +12,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
-    QRadioButton,
-    QButtonGroup,
+    QTextEdit,
     QPushButton,
     QMessageBox,
     QSpacerItem,
@@ -23,19 +22,17 @@ from PyQt6.QtCore import Qt, QPoint
 from PyQt6.QtGui import QScreen
 from datetime import datetime
 import os
-import csv
-import random # Import random for question selection
 
 
 class ModernMentalHealthSurveyApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mental Health Quick Check")
+        self.setWindowTitle("Mental Health Check-in (Open Questions + Camera Log)")
 
         # --- Define Log Directory ---
         self.log_directory = "logs"
         try:
-            os.makedirs(self.log_directory, exist_ok=True)  # Create if it doesn't exist
+            os.makedirs(self.log_directory, exist_ok=True)
             print(
                 f"Logs will be saved in directory: '{os.path.abspath(self.log_directory)}'"
             )
@@ -43,9 +40,11 @@ class ModernMentalHealthSurveyApp(QWidget):
             print(
                 f"Error creating log directory '{self.log_directory}': {e}. Logs will be saved in current directory."
             )
-            # Fallback to current directory if creation fails
             self.log_directory = "."
 
+        # --- ONNX Model Configuration ---
+        # PASTIKAN FILE MODEL.ONNX ADA DI DIREKTORI YANG SAMA
+        # ATAU UBAH PATH SESUAI LOKASI MODEL ANDA.
         # --- ONNX Model Configuration (USER ACTION REQUIRED) ---
         self.onnx_model_path = "model.onnx"
         self.class_labels = [
@@ -67,16 +66,27 @@ class ModernMentalHealthSurveyApp(QWidget):
         self._load_onnx_model()
         # --- End ONNX Configuration ---
 
-        # --- Question Loading and Randomization ---
-        self.augmented_data_file = "Hasil Augmentasi - Sheet1.csv" # Your CSV file
-        self.questions = self._load_and_randomize_questions() # Call new method to load and randomize
-        # --- End Question Loading ---
-
+        self.questions = [
+            {
+                "text": "1. Bagaimana kabarmu belakangan ini, ada hal yang membuatmu merasa sangat senang atau sedih?",
+            },
+            {
+                "text": "2. Akhir-akhir ini, apa saja hal yang paling menyita pikiranmu, baik itu dalam pekerjaan, hubungan, atau hal lainnya?",
+            },
+            {
+                "text": "3. Adakah perubahan signifikan yang kamu rasakan dalam dirimu, seperti pola tidur, nafsu makan, atau energimu?",
+            },
+            {
+                "text": "4. Dalam beberapa waktu terakhir, apakah ada momen di mana kamu merasa sangat kewalahan, putus asa, atau bahkan tidak berharga? Jika iya, bisakah kamu ceritakan lebih banyak?",
+            },
+            {
+                "text": "5. Jika kamu bisa mengubah satu hal yang berkaitan dengan perasaanmu saat ini, apa itu, dan apa harapanmu untuk dirimu sendiri ke depannya?",
+            },
+        ]
         self.num_questions = len(self.questions)
         self.current_question_index = 0
-        self.user_answers = [None] * self.num_questions
+        self.user_answers = [""] * self.num_questions
 
-        # Generate unique log filenames for this session
         base_timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         self.survey_log_file_name = os.path.join(
@@ -85,13 +95,17 @@ class ModernMentalHealthSurveyApp(QWidget):
         self.prediction_log_file_name = os.path.join(
             self.log_directory, f"prediction_log_{base_timestamp_str}.json"
         )
+        self.answer_log_file_name = os.path.join(
+            self.log_directory, f"open_answers_log_{base_timestamp_str}.json"
+        )
 
         print(f"Current session survey log file: {self.survey_log_file_name}")
         print(f"Current session prediction log file: {self.prediction_log_file_name}")
+        print(f"Current session open answers log file: {self.answer_log_file_name}")
 
         self._log_event(
             action_type="passive", event_type="app_init"
-        )  # Logs to survey_log_file_name
+        )
 
         self.capture_active = False
         self.capture_thread = None
@@ -106,7 +120,7 @@ class ModernMentalHealthSurveyApp(QWidget):
             action_type="passive",
             event_type="question_displayed",
             details={"question_index": self.current_question_index + 1},
-        )  # Logs to survey_log_file_name
+        )
 
     def _load_onnx_model(self):
         # ... (same as before) ...
@@ -129,7 +143,6 @@ class ModernMentalHealthSurveyApp(QWidget):
             self.ort_session = None
 
     def _center_window(self):
-        # ... (same as before) ...
         screen = QApplication.primaryScreen()
         if screen:
             screen_geometry = screen.availableGeometry()
@@ -142,7 +155,6 @@ class ModernMentalHealthSurveyApp(QWidget):
     def _log_event(
         self, action_type: Literal["active", "passive"], event_type: str, details=None
     ):
-        # This logs to self.survey_log_file_name
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         log_entry = {
             "timestamp": timestamp,
@@ -178,17 +190,48 @@ class ModernMentalHealthSurveyApp(QWidget):
                 f"Error writing to survey log file '{self.survey_log_file_name}': {e}"
             )
 
+    def _log_open_answer(self, question_text: str, answer_text: str):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        log_entry = {
+            "timestamp": timestamp,
+            "question": question_text,
+            "answer": answer_text,
+            "question_index": self.current_question_index + 1
+        }
+
+        all_answers = []
+        try:
+            if (
+                os.path.exists(self.answer_log_file_name)
+                and os.path.getsize(self.answer_log_file_name) > 0
+            ):
+                with open(self.answer_log_file_name, "r", encoding="utf-8") as f:
+                    all_answers = json.load(f)
+                if not isinstance(all_answers, list):
+                    all_answers = []
+            else:
+                all_answers = []
+        except json.JSONDecodeError:
+            all_answers = []
+        except Exception:
+            all_answers = []
+
+        all_answers.append(log_entry)
+        try:
+            with open(self.answer_log_file_name, "w", encoding="utf-8") as f:
+                json.dump(all_answers, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error writing to open answers log file '{self.answer_log_file_name}': {e}")
+
     def _log_image_prediction(
         self, predicted_label: str, confidence: float, predicted_index: int
     ):
-        # This new method logs to self.prediction_log_file_name
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         log_entry = {
             "timestamp": timestamp,
             "predicted_label": predicted_label,
             "confidence": round(confidence, 4),
             "predicted_index": int(predicted_index),
-            # You could add more details here if needed, e.g., raw scores
         }
 
         all_predictions = []
@@ -204,7 +247,7 @@ class ModernMentalHealthSurveyApp(QWidget):
                         f"Warning: Prediction log file '{self.prediction_log_file_name}' was not a list. Resetting."
                     )
                     all_predictions = []
-            else:  # File doesn't exist yet for this session or is empty
+            else:
                 all_predictions = []
         except json.JSONDecodeError:
             print(
@@ -228,7 +271,6 @@ class ModernMentalHealthSurveyApp(QWidget):
             )
 
     def _preprocess_image(self, frame: np.ndarray) -> np.ndarray:
-        # ... (same as before, with mean/std normalization) ...
         img = cv2.resize(frame, self.input_size)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = img.astype(np.float32) / 255.0
@@ -240,7 +282,6 @@ class ModernMentalHealthSurveyApp(QWidget):
         return img
 
     def _start_webcam_capture(self):
-        # ... (same as before) ...
         if self.capture_thread is None:
             self.capture_active = True
             self.capture_thread = threading.Thread(
@@ -250,15 +291,14 @@ class ModernMentalHealthSurveyApp(QWidget):
             print("Webcam capture thread started.")
 
     def _webcam_capture_loop(self):
-        # ... (modified to call _log_image_prediction) ...
         cap = None
         try:
             cap = cv2.VideoCapture(0)
             if not cap.isOpened():
-                print(f"{datetime.now()}: Error: Could not open webcam.")
+                print(f"{datetime.now()}: Error: Could not open webcam. Capture disabled.")
                 self.capture_active = False
                 return
-            print(f"{datetime.now()}: Webcam opened successfully.")
+            print(f"{datetime.now()}: Webcam opened successfully. Starting capture loop.")
 
             while self.capture_active:
                 ret, frame = cap.read()
@@ -277,7 +317,6 @@ class ModernMentalHealthSurveyApp(QWidget):
                             if 0 <= predicted_index < len(self.class_labels):
                                 predicted_label = self.class_labels[predicted_index]
 
-                            # Log to the dedicated prediction log file
                             self._log_image_prediction(
                                 predicted_label, confidence, predicted_index
                             )
@@ -286,12 +325,15 @@ class ModernMentalHealthSurveyApp(QWidget):
                             print(
                                 f"{datetime.now()}: Error during model inference: {e}"
                             )
+                    else:
+                        print(f"{datetime.now()}: ONNX session not loaded, skipping inference.")
                 else:
                     print(
                         f"{datetime.now()}: Error: Failed to capture frame from webcam."
                     )
 
-                for _ in range(10):
+                # Control frame rate for logging (e.g., log every 1 second)
+                for _ in range(10): # Approx. 1 second delay (10 * 0.1s)
                     if not self.capture_active:
                         break
                     time.sleep(0.1)
@@ -306,7 +348,6 @@ class ModernMentalHealthSurveyApp(QWidget):
             self.capture_active = False
 
     def _stop_webcam_capture(self):
-        # ... (same as before) ...
         print("Attempting to stop webcam capture thread...")
         self.capture_active = False
         if self.capture_thread and self.capture_thread.is_alive():
@@ -317,91 +358,12 @@ class ModernMentalHealthSurveyApp(QWidget):
                 print("Webcam capture thread stopped.")
         self.capture_thread = None
 
-    def _load_and_randomize_questions(self):
-        """
-        Loads augmented questions from CSV, groups them by ID,
-        and selects one random question for each ID.
-        """
-        grouped_data = {}
-        try:
-            with open(self.augmented_data_file, mode='r', encoding='utf-8') as file:
-                reader = csv.reader(file)
-                header = next(reader)  # Skip header row
-
-                for row in reader:
-                    if len(row) >= 6: # Ensure row has enough columns
-                        try:
-                            q_id = int(row[0])  # ID is in the first column
-                            # Ensure the question text is properly stripped of potential extra quotes
-                            augmented_text = row[5].strip().strip('"') # Augmented text is in the sixth column
-                            if q_id not in grouped_data:
-                                grouped_data[q_id] = []
-                            grouped_data[q_id].append(augmented_text)
-                        except ValueError:
-                            print(f"Skipping row due to invalid ID format: {row[0]}")
-                    else:
-                        print(f"Skipping malformed row (not enough columns): {row}")
-        except FileNotFoundError:
-            print(f"Error: CSV file '{self.augmented_data_file}' not found. Using default questions.")
-            return self._get_default_questions()
-        except Exception as e:
-            print(f"Error loading augmented data from CSV: {e}. Using default questions.")
-            return self._get_default_questions()
-
-        generated_questions = []
-        sorted_ids = sorted(grouped_data.keys()) # Ensure questions are ordered by ID (1, 2, 3...)
-
-        for q_id in sorted_ids:
-            augmented_texts = grouped_data.get(q_id, [])
-            if augmented_texts:
-                selected_text = random.choice(augmented_texts)
-                generated_questions.append({
-                    "text": f"{q_id}. {selected_text}",
-                    "options": ["Ya", "Tidak"], # Translate "Yes" and "No" to Indonesian
-                })
-            else:
-                print(f"Warning: No augmented texts found for ID {q_id}. Skipping this question.")
-
-        if not generated_questions:
-            print("No questions were loaded from the CSV. Using default questions.")
-            return self._get_default_questions()
-
-        return generated_questions
-
-    def _get_default_questions(self):
-        """Provides a fallback list of default questions."""
-        return [
-            {
-                "text": "1. Selama 2 minggu terakhir, apakah Anda sering merasa murung, sedih, atau putus asa?",
-                "options": ["Ya", "Tidak"],
-            },
-            {
-                "text": "2. Selama 2 minggu terakhir, apakah Anda sering merasa kurang minat atau kesenangan dalam melakukan sesuatu?",
-                "options": ["Ya", "Tidak"],
-            },
-            {
-                "text": "3. Selama 2 minggu terakhir, apakah Anda sering merasa gugup, cemas, atau gelisah?",
-                "options": ["Ya", "Tidak"],
-            },
-            {
-                "text": "4. Selama 2 minggu terakhir, apakah Anda sering terganggu karena tidak bisa berhenti atau mengendalikan kekhawatiran?",
-                "options": ["Ya", "Tidak"],
-            },
-            {
-                "text": "5. Selama 2 minggu terakhir, apakah Anda sering merasa kesulitan untuk bersantai?",
-                "options": ["Ya", "Tidak"],
-            },
-        ]
-
-
     def init_ui(self):
-        # ... (UI setup - same as before) ...
         self.setObjectName("MainWindow")
         self.main_layout = QVBoxLayout(self)
         self.main_layout.setContentsMargins(20, 20, 20, 20)
         self.main_layout.setSpacing(20)
 
-        # Updated disclaimer and instructions for Indonesian context
         self.disclaimer_label = QLabel(
             "<b>Penting:</b> Ini BUKAN alat diagnostik. Konsultasikan dengan profesional untuk masalah kesehatan mental."
         )
@@ -410,7 +372,7 @@ class ModernMentalHealthSurveyApp(QWidget):
         self.main_layout.addWidget(self.disclaimer_label)
 
         self.instructions_label = QLabel(
-            "Mohon jawab pertanyaan-pertanyaan berikut berdasarkan bagaimana perasaan Anda selama <b>2 minggu terakhir</b>."
+            "Silakan jawab pertanyaan-pertanyaan berikut berdasarkan perasaan Anda selama <b>beberapa waktu terakhir</b>."
         )
         self.instructions_label.setObjectName("InstructionsLabel")
         self.instructions_label.setWordWrap(True)
@@ -428,16 +390,17 @@ class ModernMentalHealthSurveyApp(QWidget):
             self.progress_label, alignment=Qt.AlignmentFlag.AlignRight
         )
 
-        self.question_label = QLabel("Question text will appear here.")
+        self.question_label = QLabel("Teks pertanyaan akan muncul di sini.")
         self.question_label.setObjectName("QuestionLabel")
         self.question_label.setWordWrap(True)
         question_area_layout.addWidget(self.question_label)
 
-        self.options_layout_container = QVBoxLayout()
-        self.options_layout_container.setSpacing(10)
-        self.radio_button_group = QButtonGroup(self)
-        self.radio_button_group.setExclusive(True)
-        question_area_layout.addLayout(self.options_layout_container)
+        self.answer_input = QTextEdit()
+        self.answer_input.setObjectName("AnswerInput")
+        self.answer_input.setPlaceholderText("Ketik jawaban Anda di sini...")
+        self.answer_input.setFixedHeight(100)
+        question_area_layout.addWidget(self.answer_input)
+
         question_area_layout.addSpacerItem(
             QSpacerItem(5, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         )
@@ -446,7 +409,7 @@ class ModernMentalHealthSurveyApp(QWidget):
         self.nav_buttons_layout = QHBoxLayout()
         self.nav_buttons_layout.setSpacing(10)
 
-        self.prev_button = QPushButton("Sebelumnya") # Translated to Indonesian
+        self.prev_button = QPushButton("Sebelumnya")
         self.prev_button.setObjectName("PrevButton")
         self.prev_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.prev_button.clicked.connect(self.go_previous)
@@ -457,7 +420,7 @@ class ModernMentalHealthSurveyApp(QWidget):
         )
         self.nav_buttons_layout.addWidget(self.prev_button)
 
-        self.next_button = QPushButton("Selanjutnya") # Translated to Indonesian
+        self.next_button = QPushButton("Selanjutnya")
         self.next_button.setObjectName("NextButton")
         self.next_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.next_button.setDefault(True)
@@ -470,7 +433,6 @@ class ModernMentalHealthSurveyApp(QWidget):
         self.resize(600, 550)
 
     def apply_styles(self):
-        # ... (QSS - same as before) ...
         qss = """
             QWidget#MainWindow { background-color: #F4F6F8; font-family: 'Segoe UI', Arial, sans-serif; }
             QLabel#DisclaimerLabel { background-color: #FFF3CD; color: #664D03; border: 1px solid #FFECB5; border-radius: 6px; padding: 12px; font-size: 9pt; font-weight: normal; }
@@ -478,12 +440,17 @@ class ModernMentalHealthSurveyApp(QWidget):
             QWidget#QuestionAreaWidget { background-color: #FFFFFF; border-radius: 8px; border: 1px solid #E2E8F0; }
             QLabel#QuestionLabel { color: #1A202C; font-size: 13pt; font-weight: bold; line-height: 1.5; padding-bottom: 10px; }
             QLabel#ProgressLabel { color: #718096; font-size: 9pt; font-weight: bold; }
-            QRadioButton { font-size: 11pt; color: #2D3748; padding: 8px 5px; spacing: 10px; }
-            QRadioButton::indicator { width: 18px; height: 18px; }
-            QRadioButton::indicator:unchecked { border: 2px solid #A0AEC0; border-radius: 9px; background-color: #FFFFFF; }
-            QRadioButton::indicator:unchecked:hover { border: 2px solid #718096; }
-            QRadioButton::indicator:checked { border: 2px solid #3182CE; border-radius: 9px; background-color: #3182CE; }
-            /* QRadioButton::indicator:checked::after { content: ""; display: block; width: 8px; height: 8px; margin: 3px; border-radius: 4px; background-color: white; } */
+            QTextEdit#AnswerInput {
+                border: 1px solid #CBD5E0;
+                border-radius: 5px;
+                padding: 10px;
+                font-size: 10pt;
+                color: #2D3748;
+                background-color: #FFFFFF;
+            }
+            QTextEdit#AnswerInput:focus {
+                border: 1px solid #3182CE;
+            }
             QPushButton { font-size: 11pt; font-weight: bold; padding: 10px 20px; border-radius: 6px; border: none; min-width: 100px; }
             QPushButton#NextButton { background-color: #3182CE; color: white; }
             QPushButton#NextButton:hover { background-color: #2B6CB0; }
@@ -500,85 +467,67 @@ class ModernMentalHealthSurveyApp(QWidget):
         self.setStyleSheet(qss)
 
     def display_question(self):
-        # ... (same as before) ...
-        for button in self.radio_button_group.buttons():
-            self.radio_button_group.removeButton(button)
-            button.deleteLater()
-        while self.options_layout_container.count():
-            child = self.options_layout_container.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
-        if not self.questions: # Handle case where no questions were loaded
-            self.question_label.setText("No questions available. Please check the CSV file.")
-            self.progress_label.setText("")
-            self.prev_button.setEnabled(False)
-            self.next_button.setEnabled(False)
-            return
+        # Save answer from previous question before displaying new one
+        # This logic ensures the answer from the *previous* question is logged before moving to the *current* one
+        if self.current_question_index < self.num_questions and self.current_question_index >= 0:
+            if self.current_question_index > 0: # If not on the very first question
+                # The answer for the question we are *leaving* (current_question_index - 1)
+                # would have been saved in self.user_answers already by go_next/go_previous.
+                # Here we just ensure it's logged if it wasn't due to direct navigation or initial display.
+                # We can refine this to avoid double-logging if go_next/go_previous already logged it.
+                # For simplicity, we'll log it directly in go_next/go_previous.
+                pass # Logic moved to go_next/go_previous for more precise logging point
 
         if self.current_question_index < self.num_questions:
             question_data = self.questions[self.current_question_index]
             self.question_label.setText(question_data["text"])
             self.progress_label.setText(
-                f"Pertanyaan {self.current_question_index + 1} dari {self.num_questions}" # Translated
+                f"Pertanyaan {self.current_question_index + 1} dari {self.num_questions}"
             )
-            for option_text in question_data["options"]:
-                radio_button = QRadioButton(option_text)
-                radio_button.setCursor(Qt.CursorShape.PointingHandCursor)
-                self.options_layout_container.addWidget(radio_button)
-                self.radio_button_group.addButton(radio_button)
-                radio_button.toggled.connect(
-                    lambda checked, q_idx=self.current_question_index, opt_txt=option_text: self._handle_option_toggled(
-                        checked, q_idx, opt_txt
-                    )
-                )
-                if self.user_answers[self.current_question_index] == option_text:
-                    radio_button.setChecked(True)
+
+            self.answer_input.setText(self.user_answers[self.current_question_index])
+
             self.prev_button.setEnabled(self.current_question_index > 0)
             if self.current_question_index == self.num_questions - 1:
-                self.next_button.setText("Selesai") # Translated
+                self.next_button.setText("Selesai")
             else:
-                self.next_button.setText("Selanjutnya") # Translated
+                self.next_button.setText("Selanjutnya")
         else:
             self.process_survey()
 
-    def _handle_option_toggled(self, checked, question_idx, option_text):
-        # ... (same as before, logs to survey_log_file_name) ...
-        if checked:
-            self._log_event(
-                action_type="active",
-                event_type="option_selected",
-                details={
-                    "question_index": question_idx + 1,
-                    "selected_option": option_text,
-                },
-            )
-            self.user_answers[question_idx] = option_text
-
     def go_next(self):
-        # ... (same as before, logs to survey_log_file_name) ...
         current_q_idx_for_log = self.current_question_index + 1
         action_text = (
-            "next_clicked" if self.next_button.text() == "Selanjutnya" else "finish_clicked" # Adjusted for Indonesian text
+            "next_clicked" if self.next_button.text() == "Selanjutnya" else "finish_clicked"
         )
-        self._log_event(
-            action_type="active",
-            event_type=action_text,
-            details={"from_question": current_q_idx_for_log},
-        )
-        if self.user_answers[self.current_question_index] is None:
+
+        current_answer = self.answer_input.toPlainText().strip()
+        self.user_answers[self.current_question_index] = current_answer
+
+        if not current_answer:
             QMessageBox.warning(
-                self, "Belum Ada Jawaban", "Mohon pilih jawaban sebelum melanjutkan." # Translated
+                self, "Jawaban Kosong", "Silakan isi jawaban Anda sebelum melanjutkan."
             )
             self._log_event(
                 action_type="passive",
                 event_type="validation_error",
                 details={
-                    "message": "No answer selected for question "
+                    "message": "Tidak ada jawaban yang diisi untuk pertanyaan "
                     + str(current_q_idx_for_log)
                 },
             )
             return
+
+        # Log the answer to the dedicated file when moving *from* this question
+        self._log_open_answer(self.questions[self.current_question_index]["text"], current_answer)
+
+        self._log_event(
+            action_type="active",
+            event_type=action_text,
+            details={"from_question": current_q_idx_for_log, "answer_preview": current_answer[:50] + "..." if len(current_answer) > 50 else current_answer},
+        )
+
+
         if self.current_question_index < self.num_questions - 1:
             self.current_question_index += 1
             self.display_question()
@@ -591,17 +540,22 @@ class ModernMentalHealthSurveyApp(QWidget):
             self.process_survey()
 
     def go_previous(self):
-        # ... (same as before, logs to survey_log_file_name) ...
         current_q_idx_for_log = self.current_question_index + 1
+        # Save current answer before moving
+        current_answer = self.answer_input.toPlainText().strip()
+        self.user_answers[self.current_question_index] = current_answer
+
+        # Log the answer to the dedicated file when moving *from* this question
+        self._log_open_answer(self.questions[self.current_question_index]["text"], current_answer)
+
         self._log_event(
             action_type="active",
             event_type="previous_clicked",
-            details={"from_question": current_q_idx_for_log},
+            details={"from_question": current_q_idx_for_log, "answer_preview": current_answer[:50] + "..." if len(current_answer) > 50 else current_answer},
         )
         if self.current_question_index > 0:
             self.current_question_index -= 1
             self.display_question()
-            # Corrected action_type for question_displayed on previous
             self._log_event(
                 action_type="passive",
                 event_type="question_displayed",
@@ -609,91 +563,85 @@ class ModernMentalHealthSurveyApp(QWidget):
             )
 
     def process_survey(self):
-        # ... (same as before, logs to survey_log_file_name) ...
+        # Ensure the last answer is saved and logged before processing
+        current_answer = self.answer_input.toPlainText().strip()
+        self.user_answers[self.current_question_index] = current_answer
+        self._log_open_answer(self.questions[self.current_question_index]["text"], current_answer)
+
+
         self._log_event(action_type="passive", event_type="survey_submitted")
-        if any(answer is None for answer in self.user_answers):
+
+        if any(not answer for answer in self.user_answers):
             QMessageBox.warning(
                 self,
-                "Survei Belum Lengkap", # Translated
-                "Satu atau lebih pertanyaan belum dijawab. Mohon tinjau kembali.", # Translated
+                "Survei Belum Lengkap",
+                "Satu atau lebih pertanyaan belum dijawab. Mohon periksa kembali.",
             )
             self._log_event(
                 action_type="passive",
                 event_type="validation_error",
-                details={"message": "Incomplete survey."},
+                details={"message": "Survei belum lengkap (ada jawaban kosong)."},
             )
             return
-        yes_count = 0
-        responses_summary = []
-        for i, answer in enumerate(self.user_answers):
-            question_text_full = self.questions[i]["text"]
-            # To get the short text, we need to handle the "1. " prefix added during randomization
-            question_text_short = (
-                question_text_full.split(". ", 1)[1]
-                if ". " in question_text_full
-                else question_text_full
-            )
-            responses_summary.append(f"- {question_text_short}: {answer}")
-            if answer == "Ya": # Adjusted for Indonesian
-                yes_count += 1
-        result_message_intro = (
-            "Terima kasih telah menyelesaikan pemeriksaan ini.\n\nJawaban Anda:\n" # Translated
-            + "\n".join(responses_summary)
-            + "\n\n"
+
+        summary_paragraph = (
+            "Terima kasih telah meluangkan waktu untuk check-in ini. "
+            "Berikut adalah ringkasan dari apa yang telah Anda bagikan:\n\n"
         )
-        if yes_count >= 2:
-            result_message_intro += (
-                "Berdasarkan jawaban Anda, mungkin akan sangat membantu jika Anda berbicara dengan seseorang tentang perasaan Anda. " # Translated
-                + "Ingat, dukungan tersedia, dan berbicara dengan profesional kesehatan yang berkualitas dapat memberikan panduan." # Translated
-            )
-        else:
-            result_message_intro += (
-                "Terima kasih telah meluangkan waktu untuk pemeriksaan ini. Ingatlah untuk memprioritaskan kesejahteraan Anda. " # Translated
-                + "Jika Anda merasa kewalahan atau memiliki kekhawatiran, menghubungi profesional kesehatan adalah langkah positif." # Translated
-            )
-        result_message_intro += "\n\n<b>Disclaimer: Alat ini hanya untuk tujuan ilustrasi dan bukan pengganti nasihat, diagnosis, atau pengobatan medis profesional.</b>" # Translated
+
+        for i, question_data in enumerate(self.questions):
+            question_short = question_data["text"].split(". ", 1)[1] if ". " in question_data["text"] else question_data["text"]
+            answer = self.user_answers[i]
+            summary_paragraph += f"Mengenai '{question_short}', Anda menyampaikan bahwa '{answer}'. "
+
+        summary_paragraph += (
+            "\n\nPerlu diingat, ini adalah ruang untuk merefleksikan diri, dan setiap perasaan atau pikiran yang muncul adalah valid. "
+            "Jika ada hal yang terasa membebani atau ingin Anda diskusikan lebih lanjut, jangan ragu untuk mencari dukungan dari profesional kesehatan mental. "
+            "Langkah ini adalah investasi penting untuk kesejahteraan Anda."
+            "\n\n<b>Pernyataan: Alat ini hanya untuk tujuan ilustrasi dan bukan pengganti nasihat, diagnosis, atau pengobatan medis profesional.</b>"
+        )
+
         dialog = QMessageBox(self)
         dialog.setStyleSheet(self.styleSheet())
-        dialog.setWindowTitle("Pemeriksaan Selesai") # Translated
+        dialog.setWindowTitle("Check-in Selesai")
         dialog.setIcon(QMessageBox.Icon.Information)
         dialog.setTextFormat(Qt.TextFormat.RichText)
-        dialog.setText(result_message_intro)
+        dialog.setText(summary_paragraph)
         dialog.exec()
+
         self.next_button.setEnabled(False)
         self.prev_button.setEnabled(False)
         self._log_event(action_type="passive", event_type="survey_completed")
         self.close()
 
     def closeEvent(self, event):
-        # ... (same as before, logs to survey_log_file_name) ...
         self._stop_webcam_capture()
         self._log_event(
             action_type="passive", event_type="application_closed"
-        )  # This logs to survey_log
+        )
         print(
-            f"Aplikasi ditutup. Log survei: '{self.survey_log_file_name}', Log prediksi: '{self.prediction_log_file_name}'." # Translated
+            f"Aplikasi ditutup. Log survei: '{self.survey_log_file_name}', Log prediksi: '{self.prediction_log_file_name}', Log jawaban terbuka: '{self.answer_log_file_name}'."
         )
         event.accept()
 
 
 # --- Function to Display Survey Log (Outside the App Class) ---
 def display_survey_log(log_file_name):
-    # ... (same as before) ...
     print(
-        f"\n--- Mencoba Menampilkan Log Interaksi Survei dari '{log_file_name}' ---" # Translated
+        f"\n--- Mencoba Menampilkan Log Interaksi Survei dari '{log_file_name}' ---"
     )
     try:
         if not os.path.exists(log_file_name) or os.path.getsize(log_file_name) == 0:
-            print(f"File log '{log_file_name}' tidak ditemukan atau kosong.") # Translated
+            print(f"File log '{log_file_name}' tidak ditemukan atau kosong.")
             return
         with open(log_file_name, "r", encoding="utf-8") as f:
             logs = json.load(f)
         if not isinstance(logs, list) or not logs:
-            print(f"Tidak ada log yang valid ditemukan di file JSON: {log_file_name}.") # Translated
+            print(f"Tidak ada log yang valid ditemukan di file JSON: {log_file_name}.")
             return
-        print(f"\nLog Interaksi dari '{log_file_name}':") # Translated
+        print(f"\nLog Interaksi dari '{log_file_name}':")
         print("-" * 80)
-        print(f"{'Timestamp':<25} | {'Aksi':<8} | {'Tipe Kejadian':<25} | {'Detail'}") # Translated
+        print(f"{'Timestamp':<25} | {'Aksi':<8} | {'Tipe Event':<25} | {'Detail'}")
         print("-" * 80)
         for log_entry in logs:
             ts = log_entry.get("timestamp", "N/A")
@@ -711,37 +659,34 @@ def display_survey_log(log_file_name):
         print("-" * 80)
     except json.JSONDecodeError:
         print(
-            f"Error: Tidak dapat mendekode JSON dari '{log_file_name}'. File mungkin rusak." # Translated
+            f"Error: Tidak dapat mendekode JSON dari '{log_file_name}'. File mungkin rusak."
         )
     except Exception as e:
         print(
-            f"Terjadi kesalahan tak terduga saat menampilkan log dari '{log_file_name}': {e}" # Translated
+            f"Terjadi kesalahan tak terduga saat menampilkan log dari '{log_file_name}': {e}"
         )
 
 
-# --- New Function to Display Prediction Log ---
+# --- Function to Display Prediction Log ---
 def display_prediction_log(log_file_name):
-    """
-    Reads a specific JSON prediction log file and prints its content to the console.
-    """
     print(
-        f"\n--- Mencoba Menampilkan Log Prediksi Gambar dari '{log_file_name}' ---" # Translated
+        f"\n--- Mencoba Menampilkan Log Prediksi Gambar dari '{log_file_name}' ---"
     )
     try:
         if not os.path.exists(log_file_name) or os.path.getsize(log_file_name) == 0:
-            print(f"File log prediksi '{log_file_name}' tidak ditemukan atau kosong.") # Translated
+            print(f"File log prediksi '{log_file_name}' tidak ditemukan atau kosong.")
             return
 
         with open(log_file_name, "r", encoding="utf-8") as f:
             predictions = json.load(f)
 
         if not isinstance(predictions, list) or not predictions:
-            print(f"Tidak ada prediksi yang valid ditemukan di file JSON: {log_file_name}.") # Translated
+            print(f"Tidak ada prediksi valid ditemukan di file JSON: {log_file_name}.")
             return
 
-        print(f"\nLog Prediksi Gambar dari '{log_file_name}':") # Translated
+        print(f"\nLog Prediksi Gambar dari '{log_file_name}':")
         print("-" * 60)
-        print(f"{'Timestamp':<25} | {'Label Diprediksi':<20} | {'Kepercayaan':<10}") # Translated
+        print(f"{'Timestamp':<25} | {'Label Prediksi':<20} | {'Keyakinan':<10}")
         print("-" * 60)
         for entry in predictions:
             ts = entry.get("timestamp", "N/A")
@@ -752,11 +697,51 @@ def display_prediction_log(log_file_name):
 
     except json.JSONDecodeError:
         print(
-            f"Error: Tidak dapat mendekode JSON dari log prediksi '{log_file_name}'. File mungkin rusak." # Translated
+            f"Error: Tidak dapat mendekode JSON dari log prediksi '{log_file_name}'. File mungkin rusak."
         )
     except Exception as e:
         print(
-            f"Terjadi kesalahan tak terduga saat menampilkan log prediksi dari '{log_file_name}': {e}" # Translated
+            f"Terjadi kesalahan tak terduga saat menampilkan log prediksi dari '{log_file_name}': {e}"
+        )
+
+
+# --- Function to Display Open Answers Log ---
+def display_open_answers_log(log_file_name):
+    print(
+        f"\n--- Mencoba Menampilkan Log Jawaban Terbuka dari '{log_file_name}' ---"
+    )
+    try:
+        if not os.path.exists(log_file_name) or os.path.getsize(log_file_name) == 0:
+            print(f"File log jawaban terbuka '{log_file_name}' tidak ditemukan atau kosong.")
+            return
+        with open(log_file_name, "r", encoding="utf-8") as f:
+            answers = json.load(f)
+        if not isinstance(answers, list) or not answers:
+            print(f"Tidak ada jawaban valid ditemukan di file JSON: {log_file_name}.")
+            return
+
+        print(f"\nLog Jawaban Terbuka dari '{log_file_name}':")
+        print("-" * 90)
+        print(f"{'Timestamp':<25} | {'Pertanyaan ke':<15} | {'Pertanyaan':<30} | {'Jawaban'}")
+        print("-" * 90)
+        for entry in answers:
+            ts = entry.get("timestamp", "N/A")
+            q_idx = entry.get("question_index", "N/A")
+            question_text = entry.get("question", "N/A")
+            answer_text = entry.get("answer", "N/A")
+
+            q_display = question_text[:27] + "..." if len(question_text) > 30 else question_text
+            a_display = answer_text[:30] + "..." if len(answer_text) > 30 else answer_text
+
+            print(f"{ts:<25} | {str(q_idx):<15} | {q_display:<30} | {a_display}")
+        print("-" * 90)
+    except json.JSONDecodeError:
+        print(
+            f"Error: Tidak dapat mendekode JSON dari log jawaban terbuka '{log_file_name}'. File mungkin rusak."
+        )
+    except Exception as e:
+        print(
+            f"Terjadi kesalahan tak terduga saat menampilkan log jawaban terbuka dari '{log_file_name}': {e}"
         )
 
 
@@ -768,15 +753,15 @@ if __name__ == "__main__":
         survey_app.show()
         exit_code = app_instance.exec()
         if exit_code == 0:
-            print(f"\nAplikasi selesai.") # Translated
+            print(f"\nAplikasi selesai.")
             display_survey_log(survey_app.survey_log_file_name)
             display_prediction_log(
                 survey_app.prediction_log_file_name
-            )  # Display prediction log as well
+            )
+            display_open_answers_log(
+                survey_app.answer_log_file_name
+            )
         sys.exit(exit_code)
     else:
-        # Example: Manually display logs if app is not run
-        # display_survey_log("survey_log_YYYYMMDD_HHMMSS.json")
-        # display_prediction_log("prediction_log_YYYYMMDD_HHMMSS_ffffff.json")
-        print("Set run_application = True untuk menjalankan survei.") # Translated
+        print("Set run_application = True untuk menjalankan survei.")
         sys.exit(0)
